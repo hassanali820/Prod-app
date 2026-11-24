@@ -4,31 +4,49 @@
 #   docker compose logs -f app           follow app logs
 #   docker compose down                  stop  (add -v to also delete the database)
 #
-# Local:       http://localhost:8080       (SITE_ADDRESS=:80, HTTP_PORT=8080)
-# Production:  https://sprachtest.gerlinx.de (SITE_ADDRESS=sprachtest.gerlinx.de, HTTP_PORT=80)
+# Local:       http://localhost:8080          (ENABLE_SSL=false, HTTP_PORT=8080)
+# Production:  https://sprachtest.gerlinx.de  (ENABLE_SSL=true, DOMAIN=..., HTTP_PORT=80, HTTPS_PORT=443)
 # Mailpit UI:  http://localhost:8025       (admin report emails, local only)
 # Adminer UI:  http://localhost:8081       (database browser, local only)
 
 name: gerlinx
 
 services:
-  # ---------------------------------------------------------------- reverse proxy
-  caddy:
-    image: caddy:2.8-alpine
+  # ---------------------------------------------------------------- reverse proxy (Nginx)
+  nginx:
+    build: ./docker/nginx
     restart: unless-stopped
     ports:
-      - "${HTTP_PORT:-8080}:80"
-      - "${HTTPS_PORT:-8443}:443"
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
     environment:
-      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+      ENABLE_SSL: ${ENABLE_SSL:-false}
+      DOMAIN: ${DOMAIN:-}
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
+      - letsencrypt:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
     depends_on:
       - app
       - auth
       - rest
+
+  # ---------------------------------------------------------------- SSL certificates (Let's Encrypt)
+  # Idle when ENABLE_SSL=false. Otherwise obtains the cert once, then renews every 12 h.
+  certbot:
+    image: certbot/certbot:v2.11.0
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/certbot.sh"]
+    environment:
+      ENABLE_SSL: ${ENABLE_SSL:-false}
+      DOMAIN: ${DOMAIN:-}
+      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:-}
+      LETSENCRYPT_STAGING: ${LETSENCRYPT_STAGING:-false}
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+      - ./docker/certbot/certbot.sh:/certbot.sh:ro
+    depends_on:
+      - nginx
 
   # ---------------------------------------------------------------- application
   app:
@@ -166,5 +184,5 @@ services:
 
 volumes:
   db_data:
-  caddy_data:
-  caddy_config:
+  letsencrypt:
+  certbot_www:

@@ -7,7 +7,6 @@ npm-debug.log
 .netlify
 Dockerfile
 docker-compose*.yml
-Caddyfile
 README.md
 supabase-schema.sql
 docker

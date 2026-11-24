@@ -318,7 +318,10 @@ function goToPrecheck(attemptId) {
 
 $("micBtn").onclick = async () => {
   try {
-    if (!navigator.mediaDevices?.getUserMedia) throw new Error("Your browser does not support audio recording. Please use Chrome, Edge, Firefox or Safari over HTTPS.");
+    if (!window.isSecureContext) {
+      throw new Error(`Microphone is blocked because this page is not secure (${location.protocol}//${location.host}). Please open the site via https://`);
+    }
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("Your browser does not support audio recording. Please use Chrome, Edge, Firefox or Safari.");
     if (!window.MediaRecorder) throw new Error("Audio recording is not supported in this browser. Please update it or use Chrome.");
     micStream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }

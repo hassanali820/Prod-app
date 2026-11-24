@@ -8,12 +8,13 @@ Everything runs from **one `docker-compose.yml`**, locally and in production.
 
 | Service  | What it is                                   | URL (local)                 |
 |----------|----------------------------------------------|-----------------------------|
-| caddy    | Reverse proxy, automatic HTTPS in production | http://localhost:8080       |
-| app      | Node/Express app (UI + `/api/*`)             | via caddy                   |
+| nginx    | Reverse proxy, HTTPS on ports 80/443         | http://localhost:8080       |
+| certbot  | Gets + renews the Let's Encrypt certificate (idle if `ENABLE_SSL=false`) | — |
+| app      | Node/Express app (UI + `/api/*`)             | via nginx                   |
 | db       | PostgreSQL 15                                | internal                    |
 | db-init  | Applies `supabase-schema.sql` on every start (idempotent) | —              |
-| auth     | Supabase Auth (GoTrue) → `/auth/v1`          | via caddy                   |
-| rest     | PostgREST (Supabase REST) → `/rest/v1`       | via caddy                   |
+| auth     | Supabase Auth (GoTrue) → `/auth/v1`          | via nginx                   |
+| rest     | PostgREST (Supabase REST) → `/rest/v1`       | via nginx                   |
 | mailpit  | Catches all emails (admin reports)           | http://localhost:8025       |
 | adminer  | Database browser                             | http://localhost:8081       |
 | stripe   | Optional Stripe CLI (profile `stripe`)       | —                           |
@@ -65,14 +66,22 @@ Stripe test webhooks locally: set `MOCK_STRIPE=false` + `sk_test_…` key, run `
    ```
    SITE_URL=https://sprachtest.gerlinx.de
    SUPABASE_PUBLIC_URL=https://sprachtest.gerlinx.de
-   SITE_ADDRESS=sprachtest.gerlinx.de
+   ENABLE_SSL=true
+   DOMAIN=sprachtest.gerlinx.de
+   LETSENCRYPT_EMAIL=you@gerlinx.de
    HTTP_PORT=80
    HTTPS_PORT=443
    MOCK_STRIPE=false
    MOCK_GEMINI=false
    ```
    plus real Gemini/Stripe/Gmail keys, and **new secrets**: `node scripts/generate-keys.js` → paste `POSTGRES_PASSWORD`, `JWT_SECRET`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`.
-6. **Start**: `docker compose up -d --build` — Caddy gets the Let's Encrypt certificate automatically.
+6. **Start**: `docker compose up -d --build --remove-orphans`
+   - Nginx starts immediately with a temporary self-signed certificate.
+   - Certbot requests the real Let's Encrypt certificate (needs DNS + port 80); Nginx switches to it automatically within a minute.
+   - Check: `docker compose logs certbot nginx | grep -iE "certificate|error"`
+   - Debugging DNS? Set `LETSENCRYPT_STAGING=true` first (no rate limits). Afterwards set it to `false`, run `docker compose down && docker volume rm gerlinx_letsencrypt && docker compose up -d`.
+   - Renewal is automatic (Certbot checks every 12 h, Nginx reloads every 12 h).
+   - Nginx config lives in `docker/nginx/`; after editing run `docker compose up -d --build nginx`.
 7. **Stripe live webhook**: `https://sprachtest.gerlinx.de/api/stripe-webhook` (events `checkout.session.completed`, `checkout.session.async_payment_succeeded`).
 8. **Update**: `git pull && docker compose up -d --build`.
 
@@ -84,7 +93,8 @@ Mailpit and Adminer are bound to `127.0.0.1` only, so they are not reachable fro
 
 ```
 docker-compose.yml           Whole stack
-Caddyfile                    Proxy routes (/auth/v1, /rest/v1, app) + HTTPS
+docker/nginx/                Nginx image: routes (locations.conf), HTTP/HTTPS templates, entrypoint
+docker/certbot/certbot.sh    Let's Encrypt obtain + renew loop
 Dockerfile                   App image
 docker/db/roles.sql          DB roles for Auth/PostgREST (first start only)
 supabase-schema.sql          Tables, RLS, grants, auto-profile trigger
