@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Test Checkout — GerLinx</title>
+  <script src="https://cdn.tailwindcss.com/3.4.5"></script>
+</head>
+<body class="bg-slate-100 min-h-screen flex items-center justify-center p-4">
+  <div class="bg-white rounded-xl shadow max-w-sm w-full p-6 space-y-4">
+    <div class="bg-amber-100 text-amber-900 text-xs font-bold px-3 py-2 rounded">TEST MODE — no real payment (MOCK_STRIPE=true)</div>
+    <div>
+      <p class="text-sm text-slate-500">GerLinx German Oral Proficiency Test (5 Min)</p>
+      <p class="text-3xl font-bold">€1.00</p>
+    </div>
+    <div class="border rounded-lg px-3 py-2 text-sm text-slate-500">💳 4242 4242 4242 4242 &nbsp; 12/34 &nbsp; 123</div>
+    <p id="err" class="hidden text-sm text-red-600"></p>
+    <button id="pay" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 rounded-lg">Pay €1.00</button>
+    <a href="/?payment=cancelled" class="block text-center text-sm text-slate-500 underline">Cancel</a>
+  </div>
+  <script>
+    const p = new URLSearchParams(location.search);
+    document.getElementById("pay").onclick = async (e) => {
+      e.target.disabled = true;
+      e.target.textContent = "Processing…";
+      const res = await fetch("/api/mock-pay", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ attemptId: p.get("attemptId"), session: p.get("session") })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) return (location.href = data.redirect);
+      const err = document.getElementById("err");
+      err.textContent = data.error || "Payment failed";
+      err.classList.remove("hidden");
+      e.target.disabled = false;
+      e.target.textContent = "Pay €1.00";
+    };
+  </script>
+</body>
+</html>

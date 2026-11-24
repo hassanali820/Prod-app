@@ -1,0 +1,170 @@
+# GerLinx Sprachtest — complete stack in ONE compose file (local + production)
+#
+#   docker compose up -d --build         start everything
+#   docker compose logs -f app           follow app logs
+#   docker compose down                  stop  (add -v to also delete the database)
+#
+# Local:       http://localhost:8080       (SITE_ADDRESS=:80, HTTP_PORT=8080)
+# Production:  https://sprachtest.gerlinx.de (SITE_ADDRESS=sprachtest.gerlinx.de, HTTP_PORT=80)
+# Mailpit UI:  http://localhost:8025       (admin report emails, local only)
+# Adminer UI:  http://localhost:8081       (database browser, local only)
+
+name: gerlinx
+
+services:
+  # ---------------------------------------------------------------- reverse proxy
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+      - "${HTTPS_PORT:-8443}:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+      - auth
+      - rest
+
+  # ---------------------------------------------------------------- application
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: 3000
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  # ---------------------------------------------------------------- database (PostgreSQL)
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./docker/db/roles.sql:/docker-entrypoint-initdb.d/00-roles.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Applies supabase-schema.sql (idempotent) after Auth has created the auth.* tables.
+  db-init:
+    image: postgres:15-alpine
+    restart: "no"
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./supabase-schema.sql:/schema.sql:ro
+    entrypoint: ["sh", "-c"]
+    command:
+      - >
+        psql -v ON_ERROR_STOP=1 -h db -U postgres -d postgres -f /schema.sql &&
+        psql -h db -U postgres -d postgres -c "NOTIFY pgrst, 'reload schema'" &&
+        echo 'Schema applied.'
+    depends_on:
+      db:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------- Supabase Auth (GoTrue)
+  auth:
+    image: supabase/gotrue:v2.174.0
+    restart: unless-stopped
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: ${SITE_URL}
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@db:5432/postgres
+      GOTRUE_SITE_URL: ${SITE_URL}
+      GOTRUE_URI_ALLOW_LIST: ${SITE_URL}
+      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_EXP: 3600
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: ${AUTH_AUTOCONFIRM:-true}
+      GOTRUE_SMTP_HOST: ${AUTH_SMTP_HOST:-mailpit}
+      GOTRUE_SMTP_PORT: ${AUTH_SMTP_PORT:-1025}
+      GOTRUE_SMTP_USER: ${AUTH_SMTP_USER:-}
+      GOTRUE_SMTP_PASS: ${AUTH_SMTP_PASS:-}
+      GOTRUE_SMTP_ADMIN_EMAIL: ${MAIL_FROM:-sprachtest@gerlinx.local}
+      GOTRUE_SMTP_SENDER_NAME: GerLinx Sprachtest
+      GOTRUE_MAILER_URLPATHS_INVITE: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/v1/verify
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------- Supabase REST (PostgREST)
+  rest:
+    image: postgrest/postgrest:v12.2.12
+    restart: unless-stopped
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD}@db:5432/postgres
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------- dev tools (bound to localhost only)
+  mailpit:
+    image: axllent/mailpit:v1.29
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8025:8025"
+
+  adminer:
+    image: adminer:4.8.1
+    restart: unless-stopped
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    ports:
+      - "127.0.0.1:8081:8080"
+    depends_on:
+      - db
+
+  # Optional: forward real Stripe TEST webhooks (set MOCK_STRIPE=false + sk_test_ key)
+  #   docker compose --profile stripe up -d
+  stripe:
+    image: stripe/stripe-cli:latest
+    profiles: ["stripe"]
+    command: >
+      listen
+      --api-key ${STRIPE_SECRET_KEY:-}
+      --events checkout.session.completed,checkout.session.async_payment_succeeded
+      --forward-to http://app:3000/api/stripe-webhook
+    depends_on:
+      - app
+
+volumes:
+  db_data:
+  caddy_data:
+  caddy_config:
