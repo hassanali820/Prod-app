@@ -5,6 +5,12 @@ if [ "$ENABLE_SSL" != "true" ]; then
   while true; do sleep 86400; done
 fi
 
+if echo "$DOMAIN" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo "certbot: DOMAIN is an IP address ($DOMAIN). Let's Encrypt does not issue certificates for bare IPs."
+  echo "certbot: nginx serves a self-signed certificate instead. Use a real domain or <ip-with-dashes>.sslip.io for a trusted one."
+  while true; do sleep 86400; done
+fi
+
 EMAIL_ARG="--register-unsafely-without-email"
 [ -n "$LETSENCRYPT_EMAIL" ] && EMAIL_ARG="--email $LETSENCRYPT_EMAIL --no-eff-email"
 STAGING_ARG=""

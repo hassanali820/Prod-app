@@ -16,8 +16,11 @@ update_cert_include() {
   else
     if [ ! -s "$SELF/cert.pem" ]; then
       mkdir -p "$SELF"
-      openssl req -x509 -nodes -newkey rsa:2048 -days 30 -subj "/CN=${DOMAIN}" \
+      if echo "$DOMAIN" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then SAN="IP:${DOMAIN}"; else SAN="DNS:${DOMAIN}"; fi
+      openssl req -x509 -nodes -newkey rsa:2048 -days 365 -subj "/CN=${DOMAIN}" \
+        -addext "subjectAltName=${SAN}" \
         -keyout "$SELF/key.pem" -out "$SELF/cert.pem" >/dev/null 2>&1
+      echo "nginx: using self-signed certificate for ${DOMAIN} (until a Let's Encrypt cert exists)"
     fi
     printf 'ssl_certificate %s/cert.pem;\nssl_certificate_key %s/key.pem;\n' "$SELF" "$SELF" > "$INC.new"
   fi
